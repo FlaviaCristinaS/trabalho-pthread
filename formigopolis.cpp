@@ -7,6 +7,7 @@
 
 #define MAX_FILA 10
 #define PRIORITY_MAX 1 // A menor prioridade numérica (maior prioridade real)
+#define MAX_PEOPLE 8
 
 // Estrutura que representa uma Pessoa (cliente da lotérica)
 typedef struct {
@@ -269,16 +270,16 @@ int main(int argc, char *argv[]) {
         {"Silas",         '8', 'S', 4, 4, 0, 0}
     };
 
-    pthread_t threads[8];
-    ThreadArgs args[8];
+    pthread_t threads[MAX_PEOPLE];
+    ThreadArgs args[MAX_PEOPLE];
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < MAX_PEOPLE; i++) {
         args[i].pessoa = &pessoas_data[i];
         args[i].numInteracoes = numInteracoes;
         pthread_create(&threads[i], NULL, rotina_pessoa, &args[i]);
     }
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < MAX_PEOPLE; i++) {
         pthread_join(threads[i], NULL);
     }
 
