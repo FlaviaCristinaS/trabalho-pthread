@@ -4,39 +4,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
-
-#define MAX_FILA 10
-#define PRIORITY_MAX 1 // A menor prioridade numérica (maior prioridade real)
+#include "formigopolis.h"
 #define MAX_PEOPLE 8
-
-// Estrutura que representa uma Pessoa (cliente da lotérica)
-typedef struct {
-    char nome[30];
-    char id;
-    char grupo; // Letra para o grupo de prioridade (M, V, P, S)
-    int prioridade; // Nível de prioridade atual da pessoa. Menor número = maior prioridade
-    int prioridadeInicial; // Guarda a prioridade inicial da pessoa
-    int ordemChegadaFila; // Contador sequencial de quando a pessoa entrou na fila (para desempate)
-    int contInanição; // Contador para a lógica de inanição
-} Pessoa;
-
-// Estrutura para passar argumentos para cada thread de pessoa
-typedef struct {
-    Pessoa *pessoa; // Ponteiro para os dados da pessoa
-    int numInteracoes; // Número de vezes que a pessoa tentará usar o caixa
-} ThreadArgs;
-
-// --- DEFINIÇÃO EXPLÍCITA DO MONITOR DO CAIXA ---
-// Esta struct encapsula todas as variáveis compartilhadas e as primitivas de sincronização
-// que juntas formam o "monitor" do caixa da lotérica.
-typedef struct {
-    pthread_mutex_t mutex;       // O mutex (trava) do monitor
-    pthread_cond_t cond;         // A variável de condição do monitor
-    Pessoa fila_espera[MAX_FILA]; // A fila de espera do caixa
-    int fila_tam;                // O tamanho atual da fila
-    int ocupado;                 // Indica se o caixa está ocupado (1) ou livre (0)
-    int contadorChegadaGlobal; // Contador sequencial para atribuir a ordem de chegada
-} CaixaMonitor;
 
 // Uma instância global do nosso monitor do caixa
 CaixaMonitor monitor_caixa;
@@ -54,7 +23,7 @@ int comparar(Pessoa a, Pessoa b) {
 }
 
 // Monta a string da fila para impressão no formato "{fila:MVPS}"
-void montar_fila(CaixaMonitor *monitor, char* buffer, int tamanho) {
+void montar_fila(CaixaMonitor *monitor, char *buffer, int tamanho) {
     Pessoa ordenada[MAX_FILA];
     // Copia a fila atual do monitor para uma array temporária para ordenação
     memcpy(ordenada, monitor->fila_espera, sizeof(Pessoa) * monitor->fila_tam);
@@ -62,16 +31,16 @@ void montar_fila(CaixaMonitor *monitor, char* buffer, int tamanho) {
     // Ordena a cópia da fila usando o Bubble Sort e a função 'comparar'
     for (int i = 0; i < monitor->fila_tam - 1; i++) {
         for (int j = 0; j < monitor->fila_tam - i - 1; j++) {
-            if (comparar(ordenada[j], ordenada[j+1]) > 0) {
+            if (comparar(ordenada[j], ordenada[j + 1]) > 0) {
                 Pessoa temp = ordenada[j];
-                ordenada[j] = ordenada[j+1];
-                ordenada[j+1] = temp;
+                ordenada[j] = ordenada[j + 1];
+                ordenada[j + 1] = temp;
             }
         }
     }
 
     char grupos[5] = {0}; // Armazena os grupos já adicionados para evitar repetições
-    int usados = 0;       // Contador de grupos únicos
+    int usados = 0; // Contador de grupos únicos
     int pos = snprintf(buffer, tamanho, "{fila:"); // Inicia a string
     // Adiciona os caracteres dos grupos únicos à string da fila
     for (int i = 0; i < monitor->fila_tam; i++) {
@@ -143,7 +112,8 @@ void esperar(CaixaMonitor *monitor, Pessoa *p) {
     printf("%s está na fila do caixa %s\n", p->nome, fila_str);
 
     // Loop de espera: a pessoa espera até ser a de maior prioridade e o caixa estar livre
-    while (monitor->ocupado || (monitor->fila_tam > 0 && monitor->fila_espera[indice_maior_prioridade(monitor)].id != p->id)) {
+    while (monitor->ocupado || (monitor->fila_tam > 0 && monitor->fila_espera[indice_maior_prioridade(monitor)].id != p
+                                ->id)) {
         // Lógica de Inanição: Se a pessoa está esperando e não é a de maior prioridade
         int meu_indice_na_fila = encontrar_pessoa_na_fila(monitor, p->id);
         if (meu_indice_na_fila != -1 && monitor->fila_espera[indice_maior_prioridade(monitor)].id != p->id) {
@@ -154,7 +124,9 @@ void esperar(CaixaMonitor *monitor, Pessoa *p) {
                 if (monitor->fila_espera[meu_indice_na_fila].prioridade > PRIORITY_MAX) {
                     monitor->fila_espera[meu_indice_na_fila].prioridade--; // Aumenta prioridade
                     printf("--- %s atingiu %d frustrações! Prioridade aumentada para %d! ---\n",
-                           monitor->fila_espera[meu_indice_na_fila].nome, monitor->fila_espera[meu_indice_na_fila].contInanição, monitor->fila_espera[meu_indice_na_fila].prioridade);
+                           monitor->fila_espera[meu_indice_na_fila].nome,
+                           monitor->fila_espera[meu_indice_na_fila].contInanição,
+                           monitor->fila_espera[meu_indice_na_fila].prioridade);
                     monitor->fila_espera[meu_indice_na_fila].contInanição = 0; // Reseta frustrações
                     pthread_cond_broadcast(&monitor->cond); // Sinaliza para reavaliar
                 }
@@ -208,8 +180,8 @@ void vai_embora_para_casa(Pessoa *p) {
 }
 
 // Função que cada thread de pessoa irá executar
-void* rotina_pessoa(void* arg) {
-    ThreadArgs* args = (ThreadArgs*)arg;
+void *rotina_pessoa(void *arg) {
+    ThreadArgs *args = (ThreadArgs *) arg;
     Pessoa *p = args->pessoa; // Ponteiro para a Pessoa original
     int numInteracoes = args->numInteracoes;
 
@@ -260,14 +232,14 @@ int main(int argc, char *argv[]) {
     inicializa_caixa_monitor(&monitor_caixa);
 
     Pessoa pessoas_data[] = {
-        {"Mamãe Maria",   '1', 'M', 1, 1, 0, 0},
-        {"Papai Marcos",  '2', 'M', 1, 1, 0, 0},
-        {"Vovó Vanda",    '3', 'V', 2, 2, 0, 0},
-        {"Vovô Valter",   '4', 'V', 2, 2, 0, 0},
-        {"Pedreiro Pedro",'5', 'P', 3, 3, 0, 0},
-        {"Prima Paula",   '6', 'P', 3, 3, 0, 0},
-        {"Sueli",         '7', 'S', 4, 4, 0, 0},
-        {"Silas",         '8', 'S', 4, 4, 0, 0}
+        {"Mamãe Maria", '1', 'M', 1, 1, 0, 0},
+        {"Papai Marcos", '2', 'M', 1, 1, 0, 0},
+        {"Vovó Vanda", '3', 'V', 2, 2, 0, 0},
+        {"Vovô Valter", '4', 'V', 2, 2, 0, 0},
+        {"Pedreiro Pedro", '5', 'P', 3, 3, 0, 0},
+        {"Prima Paula", '6', 'P', 3, 3, 0, 0},
+        {"Sueli", '7', 'S', 4, 4, 0, 0},
+        {"Silas", '8', 'S', 4, 4, 0, 0}
     };
 
     pthread_t threads[MAX_PEOPLE];
