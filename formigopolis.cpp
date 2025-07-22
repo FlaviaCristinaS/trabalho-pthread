@@ -14,13 +14,24 @@ CaixaMonitor monitor_caixa;
 
 // Compara duas Pessoas para determinar a prioridade (menor número = maior prioridade)
 // Em caso de empate na prioridade, usa o tempo de chegada (menor tempo = chegou antes)
-int comparar(Pessoa a, Pessoa b) {
-    if (a.prioridade != b.prioridade) {
-        return a.prioridade - b.prioridade;
+// verifica pelo "grupo" de precedencia.
+int grupo_precedencia(char grupo) {
+    switch (grupo) {
+        case 'M': return 0;
+        case 'V': return 1;
+        case 'P': return 2;
+        case 'S': return 3;
+        default: return 4;
     }
-    // Desempate agora usa ordem_chegada_fila ---
+}
+int comparar(Pessoa a, Pessoa b) {
+    if (a.prioridade != b.prioridade)
+        return a.prioridade - b.prioridade;
+
+    // Empate de prioridade: usa ordem de chegada
     return a.ordemChegadaFila - b.ordemChegadaFila;
 }
+
 
 // Monta a string da fila para impressão no formato "{fila:MVPS}"
 void montar_fila(CaixaMonitor *monitor, char *buffer, int tamanho) {
@@ -109,7 +120,8 @@ void esperar(CaixaMonitor *monitor, Pessoa *p) {
 
     char fila_str[50];
     montar_fila(monitor, fila_str, sizeof(fila_str));
-    printf("%s está na fila do caixa %s\n", p->nome, fila_str);
+    //verde para estar na fila
+    printf("\033[1;32m%s está na fila do caixa %s\033[0m\n", p->nome, fila_str);
 
     // Loop de espera: a pessoa espera até ser a de maior prioridade e o caixa estar livre
     while (monitor->ocupado || (monitor->fila_tam > 0 && monitor->fila_espera[indice_maior_prioridade(monitor)].id != p
@@ -123,7 +135,8 @@ void esperar(CaixaMonitor *monitor, Pessoa *p) {
             if (monitor->fila_espera[meu_indice_na_fila].contInanição >= 2) {
                 if (monitor->fila_espera[meu_indice_na_fila].prioridade > PRIORITY_MAX) {
                     monitor->fila_espera[meu_indice_na_fila].prioridade--; // Aumenta prioridade
-                    printf("--- %s atingiu %d frustrações! Prioridade aumentada para %d! ---\n",
+                    // cor azul para indicar frustração
+                    printf("\033[1;34m---> %s atingiu %d frustrações! Prioridade aumentada para (%d)! <---\033[0m\n",
                            monitor->fila_espera[meu_indice_na_fila].nome,
                            monitor->fila_espera[meu_indice_na_fila].contInanição,
                            monitor->fila_espera[meu_indice_na_fila].prioridade);
@@ -147,7 +160,8 @@ void esperar(CaixaMonitor *monitor, Pessoa *p) {
 void atendido_pelo_caixa(Pessoa *p) {
     char fila_str[50];
     snprintf(fila_str, sizeof(fila_str), "{fila: }"); // Formato fixo para o exemplo do enunciado
-    printf("%s está sendo atendido(a) %s\n", p->nome, fila_str);
+    // amarelo para indicar que esta sendo atendido
+    printf("\033[1;33m%s está sendo atendido(a) %s\033[0m\n", p->nome, fila_str);
     sleep(1); // Tempo de atendimento (1 segundo)
 }
 
@@ -214,6 +228,60 @@ void inicializa_caixa_monitor(CaixaMonitor *monitor) {
     }
 }
 
+// Gerente
+
+void* rotina_gerente(void* arg) {
+    while (1) {
+        sleep(5); // Checa a cada 5 segundos
+
+        pthread_mutex_lock(&monitor_caixa.mutex);
+
+        if (monitor_caixa.ocupado == 0) {
+            int temM = 0, temV = 0, temP = 0;
+            for (int i = 0; i < monitor_caixa.fila_tam; i++) {
+                char g = monitor_caixa.fila_espera[i].grupo;
+                if (g == 'M') temM = 1;
+                else if (g == 'V') temV = 1;
+                else if (g == 'P') temP = 1;
+            }
+
+            if (temM && temV && temP) {
+                // Deadlock detectado colocando cor vermelha para ilustrar
+                printf("\033[1;31m-->DEADLOCK detectado! Gerente irá liberar alguém!<--\033[0m\n");
+
+                // Cria lista de índices válidos para sorter a galera
+                int candidatos[MAX_FILA];
+                int qtd = 0;
+                for (int i = 0; i < monitor_caixa.fila_tam; i++) {
+                    char g = monitor_caixa.fila_espera[i].grupo;
+                    if (g == 'M' || g == 'V' || g == 'P') {
+                        candidatos[qtd++] = i;
+                    }
+                }
+
+                if (qtd > 0) {
+                    int escolhido = candidatos[rand() % qtd];
+                    Pessoa *p = &monitor_caixa.fila_espera[escolhido];
+                    printf("+++ Gerente escolheu %s (grupo %c) para passar a frente fila! +++\n", p->nome, p->grupo);
+
+                    // Move essa pessoa para o início da fila
+                    Pessoa liberado = *p;
+                    for (int i = escolhido; i > 0; i--) {
+                        monitor_caixa.fila_espera[i] = monitor_caixa.fila_espera[i-1];
+                    }
+                    monitor_caixa.fila_espera[0] = liberado;
+
+                    pthread_cond_broadcast(&monitor_caixa.cond);
+                }
+            }
+        }
+
+        pthread_mutex_unlock(&monitor_caixa.mutex);
+    }
+
+}
+
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Uso: %s <numero_de_iteracoes>\n", argv[0]);
@@ -231,19 +299,30 @@ int main(int argc, char *argv[]) {
     // Inicializa o monitor do caixa antes de criar as threads
     inicializa_caixa_monitor(&monitor_caixa);
 
-    Pessoa pessoas_data[] = {
-        {"Mamãe Maria", '1', 'M', 1, 1, 0, 0},
-        {"Papai Marcos", '2', 'M', 1, 1, 0, 0},
-        {"Vovó Vanda", '3', 'V', 2, 2, 0, 0},
-        {"Vovô Valter", '4', 'V', 2, 2, 0, 0},
-        {"Pedreiro Pedro", '5', 'P', 3, 3, 0, 0},
-        {"Prima Paula", '6', 'P', 3, 3, 0, 0},
-        {"Sueli", '7', 'S', 4, 4, 0, 0},
-        {"Silas", '8', 'S', 4, 4, 0, 0}
+    Pessoa pessoas_data[MAX_PEOPLE] = {
+        {"Mamãe Maria",  '1', 'M'},
+        {"Papai Marcos", '2', 'M'},
+        {"Vovó Vanda",   '3', 'V'},
+        {"Vovô Valter",  '4', 'V'},
+        {"Pedreiro Pedro", '5', 'P'},
+        {"Prima Paula",  '6', 'P'},
+        {"Sueli",        '7', 'S'},
+        {"Silas",        '8', 'S'}
     };
+
+    // Inicializa campos extras
+    for (int i = 0; i < MAX_PEOPLE; i++) {
+        pessoas_data[i].prioridade = grupo_precedencia(pessoas_data[i].grupo) + 1; // 1 = maior prioridade
+        pessoas_data[i].prioridadeInicial = pessoas_data[i].prioridade;
+        pessoas_data[i].contInanição = 0;
+        pessoas_data[i].ordemChegadaFila = 0;
+    }
 
     pthread_t threads[MAX_PEOPLE];
     ThreadArgs args[MAX_PEOPLE];
+
+    pthread_t thread_gerente;
+    pthread_create(&thread_gerente, NULL, rotina_gerente, NULL);
 
     for (int i = 0; i < MAX_PEOPLE; i++) {
         args[i].pessoa = &pessoas_data[i];
